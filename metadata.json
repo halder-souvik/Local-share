@@ -1,0 +1,6 @@
+{
+  "name": "LocalShare",
+  "description": "Share any folder to other devices on your local network instantly",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
