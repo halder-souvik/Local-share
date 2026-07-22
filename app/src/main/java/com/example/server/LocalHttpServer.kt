@@ -148,6 +148,18 @@ class LocalHttpServer(
             return
         }
 
+        // Special route for image thumbnails & snapshots
+        if (path == "/thumb") {
+            val fileRelativePath = queryParams["path"] ?: ""
+            val fileDoc = resolveDocumentFile(rootFolder, fileRelativePath)
+            if (fileDoc != null && fileDoc.exists() && !fileDoc.isDirectory) {
+                serveInlineImage(fileDoc, output)
+            } else {
+                sendError(output, 404, "Thumbnail Not Found")
+            }
+            return
+        }
+
         val targetDoc = resolveDocumentFile(rootFolder, path)
         if (targetDoc == null || !targetDoc.exists()) {
             sendError(output, 404, "Not Found")
@@ -393,6 +405,41 @@ class LocalHttpServer(
 
             append("</div>")
 
+            // Picture Snapshots Section if images exist
+            val imageFiles = sortedFiles.filter { file ->
+                !file.isDirectory && (file.name ?: "").let { name ->
+                    val lower = name.lowercase(Locale.ROOT)
+                    lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".webp") || lower.endsWith(".gif") || lower.endsWith(".heic")
+                }
+            }
+
+            if (imageFiles.isNotEmpty()) {
+                append("<section class=\"bg-white border border-brand-border/60 rounded-3xl p-6 shadow-sm flex flex-col gap-4\">")
+                append("<div class=\"flex items-center gap-2\">")
+                append("<svg class=\"w-5 h-5 text-brand-primary\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z\"/></svg>")
+                append("<h2 class=\"text-base font-bold text-brand-deepText\">Shared Picture Snapshots (${imageFiles.size})</h2>")
+                append("</div>")
+                append("<div class=\"grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4\">")
+                for (img in imageFiles) {
+                    val name = img.name ?: "Picture"
+                    val relPath = if (path == "/") "/$name" else "$path/$name"
+                    val encRelPath = URLEncoder.encode(relPath, "UTF-8")
+                    append("<div class=\"group relative rounded-2xl overflow-hidden border border-brand-border/50 bg-brand-surface shadow-xs hover:shadow-md transition-all\">")
+                    append("<a href=\"/thumb?path=$encRelPath\" target=\"_blank\">")
+                    append("<img src=\"/thumb?path=$encRelPath\" alt=\"${escapeHtml(name)}\" class=\"w-full h-32 object-cover group-hover:scale-105 transition-transform duration-300\">")
+                    append("</a>")
+                    append("<div class=\"p-2.5 bg-white/90 backdrop-blur-xs flex items-center justify-between gap-1\">")
+                    append("<p class=\"text-xs font-semibold text-brand-text truncate\">${escapeHtml(name)}</p>")
+                    append("<a href=\"$encRelPath\" download=\"${escapeHtml(name)}\" class=\"text-brand-primary p-1 hover:bg-brand-container rounded-lg\" title=\"Download\">")
+                    append("<svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3\"/></svg>")
+                    append("</a>")
+                    append("</div>")
+                    append("</div>")
+                }
+                append("</div>")
+                append("</section>")
+            }
+
             // Directories/Files List Card
             append("<section class=\"bg-white border border-brand-border/60 rounded-3xl p-6 shadow-sm flex flex-col gap-4\">")
             append("<div class=\"flex items-center justify-between flex-wrap gap-2\">")
@@ -560,6 +607,37 @@ class LocalHttpServer(
             output.flush()
         } catch (e: Exception) {
             Log.e(tag, "Error writing file payload", e)
+        }
+    }
+
+    private fun serveInlineImage(file: DocumentFile, output: BufferedOutputStream) {
+        val inputStream = context.contentResolver.openInputStream(file.uri)
+        if (inputStream == null) {
+            sendError(output, 500, "Unable to read image.")
+            return
+        }
+
+        val size = file.length()
+        val mimeType = file.type ?: "image/jpeg"
+
+        try {
+            output.write("HTTP/1.1 200 OK\r\n".toByteArray())
+            output.write("Content-Type: $mimeType\r\n".toByteArray())
+            output.write("Content-Length: $size\r\n".toByteArray())
+            output.write("Connection: close\r\n\r\n".toByteArray())
+            output.flush()
+
+            val buffer = ByteArray(64 * 1024)
+            var bytesRead: Int
+            inputStream.use { stream ->
+                while (stream.read(buffer).also { bytesRead = it } != -1) {
+                    output.write(buffer, 0, bytesRead)
+                    onBytesTransferred(bytesRead.toLong())
+                }
+            }
+            output.flush()
+        } catch (e: Exception) {
+            Log.e(tag, "Error writing image payload", e)
         }
     }
 

@@ -53,6 +53,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.SharedFolder
 import com.example.server.LocalHttpServer
+import com.example.ui.FileSystemPickerModal
+import com.example.ui.PictureSnapshotGallery
+import com.example.ui.QrCodeModal
+import com.example.ui.QrScannerModal
 import com.example.ui.theme.MyApplicationTheme
 import java.net.URLDecoder
 import java.text.CharacterIterator
@@ -86,8 +90,8 @@ fun MainScreen() {
     val folders by viewModel.allFolders.collectAsStateWithLifecycle()
     var currentTab by remember { mutableStateOf(AppTab.HOME) }
 
-    // Dialog state for adding a folder
-    var showAddDialog by remember { mutableStateOf(false) }
+    // Dialog state for adding a folder via FileSystemPickerModal
+    var showPickerModal by remember { mutableStateOf(false) }
     var selectedUri by remember { mutableStateOf("") }
     var customName by remember { mutableStateOf("") }
     var customPort by remember { mutableStateOf("8080") }
@@ -97,6 +101,10 @@ fun MainScreen() {
 
     // Selected folder to share after notification permission is checked
     var activeFolderToStart by remember { mutableStateOf<SharedFolder?>(null) }
+
+    // Dynamic QR Modal and QR Scanner Modal state
+    var showQrModalForFolder by remember { mutableStateOf<SharedFolder?>(null) }
+    var showQrScannerModal by remember { mutableStateOf(false) }
 
     // Permission launcher for notifications (Android 13+)
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -127,7 +135,7 @@ fun MainScreen() {
             // Extract display name of selected folder
             val documentFile = DocumentFile.fromTreeUri(context, uri)
             customName = documentFile?.name ?: "Shared Folder"
-            showAddDialog = true
+            showPickerModal = true
         }
     }
 
@@ -172,20 +180,35 @@ fun MainScreen() {
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = { showQrScannerModal = true },
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .size(36.dp)
+                            .background(MaterialTheme.colorScheme.primaryContainer, CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Scan QR Code",
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
                     // Quick profile circle
                     Box(
                         modifier = Modifier
                             .padding(end = 12.dp)
                             .size(36.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer),
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = "JD",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 },
@@ -258,62 +281,27 @@ fun MainScreen() {
                     },
                     onStopShare = { viewModel.stopShare() },
                     onDeleteFolder = { folderToDelete = it },
-                    onNewShareClick = { folderLauncher.launch(null) }
+                    onNewShareClick = { showPickerModal = true },
+                    onOpenQrCode = { folder -> showQrModalForFolder = folder },
+                    onOpenQrScanner = { showQrScannerModal = true }
                 )
-                AppTab.DEVICES -> DevicesScreen()
+                AppTab.DEVICES -> DevicesScreen(onOpenQrScanner = { showQrScannerModal = true })
                 AppTab.SETTINGS -> SettingsScreen()
             }
 
-            // Folder Add Dialog
-            if (showAddDialog) {
-                AlertDialog(
-                    onDismissRequest = { showAddDialog = false },
-                    title = { Text("Share Folder Settings", fontWeight = FontWeight.Bold) },
-                    text = {
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        ) {
-                            Text(
-                                text = "Configure sharing details for: \n${getDisplayPath(selectedUri)}",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                            )
-                            OutlinedTextField(
-                                value = customName,
-                                onValueChange = { customName = it },
-                                label = { Text("Share Name") },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            OutlinedTextField(
-                                value = customPort,
-                                onValueChange = { customPort = it },
-                                label = { Text("Local Server Port") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                        }
+            // File System Picker Modal Component
+            if (showPickerModal) {
+                FileSystemPickerModal(
+                    onDismissRequest = { showPickerModal = false },
+                    onFolderSelected = { name, uriOrPath, port ->
+                        viewModel.addFolder(name, uriOrPath, port)
+                        showPickerModal = false
                     },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                val portInt = customPort.toIntOrNull() ?: 8080
-                                viewModel.addFolder(customName, selectedUri, portInt)
-                                showAddDialog = false
-                            },
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text("Create Share")
-                        }
+                    onLaunchSystemPicker = {
+                        folderLauncher.launch(null)
                     },
-                    dismissButton = {
-                        TextButton(onClick = { showAddDialog = false }) {
-                            Text("Cancel")
-                        }
-                    },
-                    shape = RoundedCornerShape(28.dp)
+                    initialUriOrPath = selectedUri,
+                    initialName = customName
                 )
             }
 
@@ -345,6 +333,33 @@ fun MainScreen() {
                     shape = RoundedCornerShape(28.dp)
                 )
             }
+
+            // Dynamic QR Code Share Modal Component
+            showQrModalForFolder?.let { folder ->
+                val ipAddress = ShareService.getLocalIpAddress() ?: "127.0.0.1"
+                QrCodeModal(
+                    folderName = folder.name,
+                    ipAddress = ipAddress,
+                    port = folder.port,
+                    onDismissRequest = { showQrModalForFolder = null },
+                    onOpenScanner = {
+                        showQrModalForFolder = null
+                        showQrScannerModal = true
+                    }
+                )
+            }
+
+            // QR Code Peer Scanner Modal Component
+            if (showQrScannerModal) {
+                QrScannerModal(
+                    onDismissRequest = { showQrScannerModal = false },
+                    onPeerConnected = { peerUrl, peerName ->
+                        Toast.makeText(context, "Connected to $peerName at $peerUrl", Toast.LENGTH_SHORT).show()
+                        LocalHttpServer.activePeers[peerUrl] = System.currentTimeMillis()
+                        showQrScannerModal = false
+                    }
+                )
+            }
         }
     }
 }
@@ -355,10 +370,13 @@ fun HomeScreen(
     onStartShare: (SharedFolder) -> Unit,
     onStopShare: (SharedFolder) -> Unit,
     onDeleteFolder: (SharedFolder) -> Unit,
-    onNewShareClick: () -> Unit
+    onNewShareClick: () -> Unit,
+    onOpenQrCode: (SharedFolder) -> Unit,
+    onOpenQrScanner: () -> Unit
 ) {
     val activeFolder = folders.find { it.isActive }
     val ipAddress = ShareService.getLocalIpAddress() ?: "0.0.0.0"
+    val displaySnapshotFolder = activeFolder ?: folders.firstOrNull()
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -372,8 +390,20 @@ fun HomeScreen(
             item {
                 ActiveServerCard(
                     activeFolder = activeFolder,
-                    ipAddress = ipAddress
+                    ipAddress = ipAddress,
+                    onOpenQrCode = { activeFolder?.let(onOpenQrCode) },
+                    onOpenQrScanner = onOpenQrScanner
                 )
+            }
+
+            // Shared Picture Snapshots Section
+            if (displaySnapshotFolder != null) {
+                item {
+                    PictureSnapshotGallery(
+                        uriString = displaySnapshotFolder.uriString,
+                        folderName = displaySnapshotFolder.name
+                    )
+                }
             }
 
             // Section Header
@@ -407,7 +437,8 @@ fun HomeScreen(
                                 onStartShare(folder)
                             }
                         },
-                        onDelete = { onDeleteFolder(folder) }
+                        onDelete = { onDeleteFolder(folder) },
+                        onOpenQrCode = { onOpenQrCode(folder) }
                     )
                 }
             }
@@ -432,7 +463,9 @@ fun HomeScreen(
 @Composable
 fun ActiveServerCard(
     activeFolder: SharedFolder?,
-    ipAddress: String
+    ipAddress: String,
+    onOpenQrCode: () -> Unit,
+    onOpenQrScanner: () -> Unit
 ) {
     val isLive = activeFolder != null
     val containerColor = if (isLive) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
@@ -497,7 +530,6 @@ fun ActiveServerCard(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 if (isLive) {
-                    // Small blinking animation simulation using simple scale or alpha
                     Box(
                         modifier = Modifier
                             .size(8.dp)
@@ -578,6 +610,47 @@ fun ActiveServerCard(
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Direct File Transfer QR Actions
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Button(
+                    onClick = onOpenQrCode,
+                    enabled = isLive,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("show_qr_button"),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = "QR Code",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Show QR", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+
+                OutlinedButton(
+                    onClick = onOpenQrScanner,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("scan_qr_button"),
+                    shape = RoundedCornerShape(14.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Scan QR",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Scan Peer", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
         }
     }
 }
@@ -586,7 +659,8 @@ fun ActiveServerCard(
 fun FolderItemRow(
     folder: SharedFolder,
     onToggleActive: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onOpenQrCode: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -647,6 +721,21 @@ fun FolderItemRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // QR button
+                IconButton(
+                    onClick = onOpenQrCode,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = "QR Code",
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
                 // Play / Stop share toggle button
                 IconButton(
                     onClick = onToggleActive,
@@ -733,7 +822,9 @@ fun EmptyStateView(onNewShareClick: () -> Unit) {
 }
 
 @Composable
-fun DevicesScreen() {
+fun DevicesScreen(
+    onOpenQrScanner: () -> Unit = {}
+) {
     val activePeersMap = LocalHttpServer.activePeers
     val activePeersList = remember(activePeersMap) {
         activePeersMap.entries.map { it.key to it.value }.sortedByDescending { it.second }
@@ -747,18 +838,39 @@ fun DevicesScreen() {
         contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp)
     ) {
         item {
-            Column(modifier = Modifier.padding(bottom = 8.dp)) {
-                Text(
-                    text = "Connected Devices",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    text = "Devices that have accessed your shared folders over Wi-Fi",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-                )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Connected Devices",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        text = "Devices connected for direct local sharing",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                    )
+                }
+
+                Button(
+                    onClick = onOpenQrScanner,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Scan QR",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Scan QR", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
 
